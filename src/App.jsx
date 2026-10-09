@@ -1,36 +1,19 @@
+﻿import { buscarBarbeiros, buscarServicos, buscarHorariosOcupados, criarAgendamento } from './agendaApi'
 import { useEffect, useMemo, useState } from 'react'
 import {
   CalendarDays,
   Check,
   ChevronLeft,
   Clock3,
-  Download,
   Scissors,
   ShieldCheck,
-  Trash2,
   UserRound,
-  UsersRound,
-  WalletCards,
   MessageCircle,
 } from 'lucide-react'
-
-const BARBERS = [
-  { id: 'rafael', name: 'Rafael', specialty: 'Cortes clássicos & degradê', initials: 'RF' },
-  { id: 'diego', name: 'Diego', specialty: 'Fade, navalhado & freestyle', initials: 'DG' },
-  { id: 'lucas', name: 'Lucas', specialty: 'Barba, acabamento & social', initials: 'LC' },
-]
-
-const SERVICES = [
-  { id: 'corte', name: 'Corte simples', price: 40, duration: 30, description: 'Corte completo com acabamento.' },
-  { id: 'corte-sobrancelha', name: 'Corte + sobrancelha', price: 50, duration: 45, description: 'Corte completo com acabamento de sobrancelha.' },
-  { id: 'barba', name: 'Barba', price: 30, duration: 30, description: 'Modelagem, alinhamento e acabamento.' },
-  { id: 'combo', name: 'Corte + barba', price: 65, duration: 60, description: 'Experiência completa de corte e barba.' },
-]
 
 const OPEN_MINUTES = 9 * 60
 const CLOSE_MINUTES = 20 * 60
 const SLOT_STEP = 15
-const STORAGE_KEY = 'barbearia-do-rafa:appointments:v1'
 const SHOP_WHATSAPP = '5571999999999' // troque pelo WhatsApp real da barbearia
 
 function money(value) {
@@ -67,14 +50,6 @@ function todayISO() {
   return new Date(d.getTime() - offset * 60_000).toISOString().slice(0, 10)
 }
 
-function loadAppointments() {
-  try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]')
-  } catch {
-    return []
-  }
-}
-
 function SectionTitle({ eyebrow, title, subtitle }) {
   return (
     <div className="section-title">
@@ -108,31 +83,64 @@ function App() {
   const [time, setTime] = useState('')
   const [name, setName] = useState('')
   const [phone, setPhone] = useState('')
-  const [appointments, setAppointments] = useState(loadAppointments)
+  const [barbers, setBarbers] = useState([])
+  const [services, setServices] = useState([])
+  const [busy, setBusy] = useState([])
+  const [catalogLoading, setCatalogLoading] = useState(true)
+  const [catalogError, setCatalogError] = useState('')
+  const [slotsLoading, setSlotsLoading] = useState(false)
+  const [slotsError, setSlotsError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const [lastBooking, setLastBooking] = useState(null)
-  const [adminDate, setAdminDate] = useState(todayISO())
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(appointments))
-  }, [appointments])
+    let cancelled = false
+    Promise.all([buscarBarbeiros(), buscarServicos()]).then(([bs, ss]) => {
+      if (cancelled) return
+      setBarbers(bs.map(b => ({ id: b.id, name: b.nome,
+        specialty: b.especialidade || '', initials: b.nome.slice(0, 2).toUpperCase() })))
+      setServices(ss.map(s => ({ id: s.id, name: s.nome,
+        price: Number(s.preco), duration: s.duracao_minutos,
+        description: `${s.duracao_minutos} minutos` })))
+    }).catch(error => {
+      console.error(error)
+      if (!cancelled) setCatalogError('Não foi possível carregar os serviços. Atualize a página.')
+    }).finally(() => { if (!cancelled) setCatalogLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
-  const selectedBarber = BARBERS.find((b) => b.id === barberId)
-  const selectedService = SERVICES.find((s) => s.id === serviceId)
+  useEffect(() => {
+    if (!barberId || !date) return
+    let cancelled = false
+    setSlotsLoading(true)
+    setSlotsError('')
+    setBusy([])
+    setTime('')
+    buscarHorariosOcupados(barberId, date).then(horarios => {
+      if (!cancelled) setBusy(horarios)
+    }).catch(error => {
+      console.error(error)
+      if (!cancelled) setSlotsError('Não foi possível consultar a agenda. Tente novamente.')
+    }).finally(() => { if (!cancelled) setSlotsLoading(false) })
+    return () => { cancelled = true }
+  }, [barberId, date])
+
+  const selectedBarber = barbers.find(b => b.id === barberId)
+  const selectedService = services.find(s => s.id === serviceId)
 
   const availableSlots = useMemo(() => {
-    if (!barberId || !serviceId || !date) return []
-    const duration = selectedService.duration
-    const sameDay = appointments.filter((a) => a.barberId === barberId && a.date === date && a.status !== 'cancelled')
+    if (!selectedBarber || !selectedService || slotsLoading || slotsError) return []
     const slots = []
-
-    for (let start = OPEN_MINUTES; start + duration <= CLOSE_MINUTES; start += SLOT_STEP) {
-      const hasConflict = sameDay.some((a) =>
-        overlaps(start, duration, timeToMinutes(a.time), a.duration),
-      )
-      if (!hasConflict) slots.push(minutesToTime(start))
+    for (let start = OPEN_MINUTES; start + selectedService.duration <= CLOSE_MINUTES; start += SLOT_STEP) {
+      const proposed = new Date(`${date}T${minutesToTime(start)}:00-03:00`)
+      const end = new Date(proposed.getTime() + selectedService.duration * 60_000)
+      if (proposed <= new Date()) continue
+      if (!busy.some(a => proposed < new Date(a.fim) && end > new Date(a.inicio))) {
+        slots.push(minutesToTime(start))
+      }
     }
     return slots
-  }, [appointments, barberId, date, serviceId, selectedService])
+  }, [selectedBarber, selectedService, busy, date, slotsLoading, slotsError])
 
   const slotGroups = useMemo(() => ({
     Manhã: availableSlots.filter((slot) => timeToMinutes(slot) < 12 * 60),
@@ -155,44 +163,43 @@ function App() {
     setView('booking')
   }
 
-  function confirmBooking(e) {
+  async function confirmBooking(e) {
     e.preventDefault()
-    if (!name.trim() || phone.replace(/\D/g, '').length < 10 || !selectedBarber || !selectedService || !time) return
-
-    const freshConflict = appointments.some(
-      (a) =>
-        a.barberId === barberId &&
-        a.date === date &&
-        a.status !== 'cancelled' &&
-        overlaps(timeToMinutes(time), selectedService.duration, timeToMinutes(a.time), a.duration),
-    )
-
-    if (freshConflict) {
-      alert('Esse horário acabou de ser ocupado. Escolha outro horário.')
-      setStep(3)
+    const digits = phone.replace(/\D/g, '')
+    if (submitting || !name.trim() || digits.length < 10 || digits.length > 13 ||
+        !selectedBarber || !selectedService || !time || slotsLoading || slotsError) return
+    setSubmitting(true)
+    try {
+      // O banco calcula a duração e rejeita conflitos concorrentes.
+      const inicio = new Date(`${date}T${time}:00-03:00`).toISOString()
+      const id = await criarAgendamento({
+        barbeiroId: barberId, servicoId: serviceId, clienteNome: name.trim(),
+        clienteWhatsapp: digits, inicio,
+      })
+      setLastBooking({
+        id, barberId, barberName: selectedBarber.name,
+        serviceId, serviceName: selectedService.name,
+        price: selectedService.price, duration: selectedService.duration,
+        date, time, clientName: name.trim(), phone: digits,
+      })
+      setView('success')
+    } catch (error) {
+      console.error(error)
+      alert('Não foi possível confirmar a reserva. O horário pode ter sido ocupado ou a conexão falhou. Escolha novamente.')
       setTime('')
-      return
+      setStep(3)
+      setSlotsLoading(true)
+      try {
+        setBusy(await buscarHorariosOcupados(barberId, date))
+        setSlotsError('')
+      } catch {
+        setSlotsError('Não foi possível atualizar a agenda. Recarregue o site.')
+      } finally {
+        setSlotsLoading(false)
+      }
+    } finally {
+      setSubmitting(false)
     }
-
-    const booking = {
-      id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
-      createdAt: new Date().toISOString(),
-      barberId,
-      barberName: selectedBarber.name,
-      serviceId,
-      serviceName: selectedService.name,
-      price: selectedService.price,
-      duration: selectedService.duration,
-      date,
-      time,
-      clientName: name.trim(),
-      phone: phone.trim(),
-      status: 'confirmed',
-    }
-
-    setAppointments((prev) => [...prev, booking])
-    setLastBooking(booking)
-    setView('success')
   }
 
   function whatsappLink(booking) {
@@ -208,28 +215,6 @@ function App() {
     ].join('\n')
     return `https://wa.me/${SHOP_WHATSAPP}?text=${encodeURIComponent(message)}`
   }
-
-  function exportCSV() {
-    const rows = [
-      ['Data', 'Horário', 'Profissional', 'Cliente', 'WhatsApp', 'Serviço', 'Duração', 'Valor'],
-      ...appointments
-        .filter((a) => a.status !== 'cancelled')
-        .sort((a, b) => `${a.date}${a.time}`.localeCompare(`${b.date}${b.time}`))
-        .map((a) => [a.date, a.time, a.barberName, a.clientName, a.phone, a.serviceName, `${a.duration} min`, money(a.price)]),
-    ]
-    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(';')).join('\n')
-    const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `agenda-barbearia-${adminDate}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
-  const adminAppointments = appointments
-    .filter((a) => a.date === adminDate && a.status !== 'cancelled')
-    .sort((a, b) => a.time.localeCompare(b.time))
 
   return (
     <main className="app-shell">
@@ -260,8 +245,10 @@ function App() {
             {step === 1 && (
               <>
                 <SectionTitle eyebrow="01 / PROFISSIONAL" title="Com quem você quer cortar?" subtitle="Toque em um barbeiro para continuar." />
+                {catalogLoading && <p className="empty">Carregando profissionais...</p>}
+                {catalogError && <p role="alert" className="empty">{catalogError}</p>}
                 <div className="barber-grid">
-                  {BARBERS.map((barber) => (
+                  {barbers.map((barber) => (
                     <button key={barber.id} className={`barber-card ${barberId === barber.id ? 'selected' : ''}`} onClick={() => { setBarberId(barber.id); setTime('') }}>
                       <div className="avatar">{barber.initials}</div>
                       <div><strong>{barber.name}</strong><span>{barber.specialty}</span></div>
@@ -269,7 +256,7 @@ function App() {
                     </button>
                   ))}
                 </div>
-                <button className="primary" disabled={!barberId} onClick={() => setStep(2)}>Continuar</button>
+                <button className="primary" disabled={!barberId || !!catalogError || catalogLoading} onClick={() => setStep(2)}>Continuar</button>
               </>
             )}
 
@@ -277,15 +264,17 @@ function App() {
               <>
                 <button className="back" onClick={() => setStep(1)}><ChevronLeft size={18}/> Voltar</button>
                 <SectionTitle eyebrow="02 / SERVIÇO" title="O que vamos fazer hoje?" subtitle={`Agenda de ${selectedBarber?.name}.`} />
+                {catalogLoading && <p className="empty">Carregando serviços...</p>}
+                {catalogError && <p role="alert" className="empty">{catalogError}</p>}
                 <div className="service-list">
-                  {SERVICES.map((service) => (
+                  {services.map((service) => (
                     <button key={service.id} className={`service-card ${serviceId === service.id ? 'selected' : ''}`} onClick={() => { setServiceId(service.id); setTime('') }}>
                       <div className="service-main"><strong>{service.name}</strong><span>{service.description}</span></div>
                       <div className="service-meta"><b>{money(service.price)}</b><small><Clock3 size={14}/>{service.duration} min</small></div>
                     </button>
                   ))}
                 </div>
-                <button className="primary" disabled={!serviceId} onClick={() => setStep(3)}>Escolher data e horário</button>
+                <button className="primary" disabled={!serviceId || !!catalogError || catalogLoading} onClick={() => setStep(3)}>Escolher data e horário</button>
               </>
             )}
 
@@ -294,6 +283,8 @@ function App() {
                 <button className="back" onClick={() => setStep(2)}><ChevronLeft size={18}/> Voltar</button>
                 <SectionTitle eyebrow="03 / AGENDA" title="Quando fica melhor para você?" subtitle={`${selectedService?.name} · ${selectedService?.duration} min com ${selectedBarber?.name}`} />
                 <label className="date-field"><CalendarDays size={18}/><span>Data</span><input type="date" min={todayISO()} value={date} onChange={(e) => { setDate(e.target.value); setTime('') }}/></label>
+                {slotsLoading && <p className="empty">Consultando horários...</p>}
+                {slotsError && <p role="alert" className="empty">{slotsError}</p>}
                 <div className="slot-sections">
                   {Object.entries(slotGroups).map(([label, slots]) => (
                     <div key={label} className="slot-group">
@@ -302,7 +293,7 @@ function App() {
                     </div>
                   ))}
                 </div>
-                <button className="primary" disabled={!time} onClick={() => setStep(4)}>Continuar com {time || 'horário'}</button>
+                <button className="primary" disabled={!time || slotsLoading || !!slotsError} onClick={() => setStep(4)}>Continuar com {time || 'horário'}</button>
               </>
             )}
 
@@ -318,7 +309,7 @@ function App() {
                 <form onSubmit={confirmBooking} className="form">
                   <label>Nome<input value={name} onChange={(e) => setName(e.target.value)} placeholder="Seu nome" required /></label>
                   <label>WhatsApp<input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(71) 99999-9999" inputMode="tel" required /></label>
-                  <button className="primary" type="submit">Confirmar agendamento</button>
+                  <button className="primary" type="submit" disabled={submitting || slotsLoading || !!slotsError}>{submitting ? "Confirmando..." : "Confirmar agendamento"}</button>
                 </form>
               </>
             )}
@@ -331,7 +322,7 @@ function App() {
           <div className="success-icon"><Check size={34}/></div>
           <span className="success-label">AGENDAMENTO CONFIRMADO</span>
           <h2>Tá marcado, {lastBooking.clientName.split(' ')[0]}!</h2>
-          <p>Seu horário foi salvo neste dispositivo.</p>
+          <p>Seu horário foi salvo na agenda da barbearia.</p>
           <div className="receipt">
             <div><span>Profissional</span><strong>{lastBooking.barberName}</strong></div>
             <div><span>Serviço</span><strong>{lastBooking.serviceName}</strong></div>
@@ -346,41 +337,10 @@ function App() {
       )}
 
       {view === 'admin' && (
-        <section className="admin-wrap">
-          <SectionTitle eyebrow="PAINEL INTERNO" title="Agenda da barbearia" subtitle="Visão simples dos atendimentos salvos neste navegador." />
-          <div className="admin-toolbar card">
-            <label><CalendarDays size={17}/>Data<input type="date" value={adminDate} onChange={(e) => setAdminDate(e.target.value)}/></label>
-            <button onClick={exportCSV}><Download size={17}/> Exportar CSV</button>
-          </div>
-
-          <div className="stats">
-            <div className="stat card"><UsersRound/><span>{adminAppointments.length}</span><small>agendamentos</small></div>
-            <div className="stat card"><WalletCards/><span>{money(adminAppointments.reduce((sum, a) => sum + a.price, 0))}</span><small>previsto</small></div>
-          </div>
-
-          {BARBERS.map((barber) => {
-            const list = adminAppointments.filter((a) => a.barberId === barber.id)
-            return (
-              <div className="barber-agenda card" key={barber.id}>
-                <div className="agenda-head"><div className="avatar small">{barber.initials}</div><div><strong>{barber.name}</strong><span>{list.length} atendimento(s)</span></div></div>
-                {list.length === 0 ? <p className="empty admin-empty">Nenhum horário marcado.</p> : (
-                  <div className="appointments">
-                    {list.map((a) => (
-                      <article key={a.id} className="appointment-row">
-                        <time>{a.time}</time>
-                        <div><strong>{a.clientName}</strong><span>{a.serviceName} · {a.duration} min</span><small>{a.phone}</small></div>
-                        <button title="Cancelar" onClick={() => {
-                          if (confirm(`Cancelar o horário de ${a.clientName} às ${a.time}?`)) {
-                            setAppointments((prev) => prev.map((item) => item.id === a.id ? { ...item, status: 'cancelled' } : item))
-                          }
-                        }}><Trash2 size={17}/></button>
-                      </article>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )
-          })}
+        <section className="card main-card">
+          <SectionTitle eyebrow="PAINEL INTERNO" title="Acesso em preparação"
+            subtitle="A agenda com nomes, WhatsApps e cancelamentos ficará disponível após configurarmos um login seguro para a equipe." />
+          <button className="primary" onClick={resetFlow}>Voltar ao agendamento</button>
         </section>
       )}
 
@@ -390,3 +350,4 @@ function App() {
 }
 
 export default App
+
