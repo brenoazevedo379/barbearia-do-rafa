@@ -131,3 +131,14 @@ footer { text-align:center; color:#5c5955; font-size:10px; padding:28px 0 4px; }
   .admin-toolbar { grid-template-columns:1fr auto; align-items:center; }
   .admin-toolbar label { min-width:320px; }
 }
+
+/* Painel interno mobile-first */
+.admin-header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+.admin-header .section-title { flex:1; min-width:0; }
+.admin-exit { flex:0 0 auto; display:flex; align-items:center; gap:6px; color:#e4c891; background:#211c14; border:1px solid #54442d; border-radius:12px; padding:10px 12px; cursor:pointer; }
+.admin-toolbar-actions { display:flex; gap:8px; }
+.admin-toolbar-actions button { flex:1; padding:0 12px; }
+.admin-error { padding:12px; color:#ffc4c4; background:#301a1a; border:1px solid #673737; border-radius:12px; font-size:13px; }
+.appointment-details { min-width:0; overflow-wrap:anywhere; }
+.appointment-row button:disabled { opacity:.5; cursor:wait; }
+@media (max-width: 390px) { .admin-header { flex-wrap:wrap; } .admin-header .section-title { flex-basis:100%; } }

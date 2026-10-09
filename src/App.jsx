@@ -1,4 +1,7 @@
-﻿import { buscarBarbeiros, buscarServicos, buscarHorariosOcupados, criarAgendamento } from './agendaApi'
+import AdminLogin from './AdminLogin'
+import AdminPanel from './AdminPanel'
+import { verificarAdmin, sairAdmin } from './adminAuth'
+import { buscarBarbeiros, buscarServicos, buscarHorariosOcupados, criarAgendamento } from './agendaApi'
 import { useEffect, useMemo, useState } from 'react'
 import {
   CalendarDays,
@@ -76,6 +79,8 @@ function StepBar({ step }) {
 
 function App() {
   const [view, setView] = useState('booking')
+  const [adminAutorizado, setAdminAutorizado] = useState(false)
+  const [authLoading, setAuthLoading] = useState(true)
   const [step, setStep] = useState(1)
   const [barberId, setBarberId] = useState('')
   const [serviceId, setServiceId] = useState('')
@@ -92,6 +97,21 @@ function App() {
   const [slotsError, setSlotsError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [lastBooking, setLastBooking] = useState(null)
+
+  useEffect(() => {
+    let ativo = true
+    verificarAdmin().then(ok => { if (ativo) setAdminAutorizado(ok) })
+      .catch(error => { console.error(error); if (ativo) setAdminAutorizado(false) })
+      .finally(() => { if (ativo) setAuthLoading(false) })
+    return () => { ativo = false }
+  }, [])
+
+  async function fazerLogout() {
+    try { await sairAdmin() }
+    catch (error) { console.error(error); window.alert('Não foi possível encerrar a sessão. Tente novamente.'); return }
+    setAdminAutorizado(false)
+    setView('booking')
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -337,13 +357,10 @@ function App() {
       )}
 
       {view === 'admin' && (
-        <section className="card main-card">
-          <SectionTitle eyebrow="PAINEL INTERNO" title="Acesso em preparação"
-            subtitle="A agenda com nomes, WhatsApps e cancelamentos ficará disponível após configurarmos um login seguro para a equipe." />
-          <button className="primary" onClick={resetFlow}>Voltar ao agendamento</button>
-        </section>
+        authLoading ? <section className="card main-card"><p>Verificando acesso...</p></section> :
+        adminAutorizado ? <AdminPanel barbers={barbers} onLogout={fazerLogout} /> :
+        <AdminLogin onAuthenticated={() => setAdminAutorizado(true)} />
       )}
-
       <footer>Barbearia do Rafa · atendimento com hora marcada</footer>
     </main>
   )
